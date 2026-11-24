@@ -1,0 +1,31 @@
+{
+  "name": "relay-chat",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Relay - a real-time team chat platform (Slack/Discord style) built to learn how real products scale.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,gateway,workers,web -c blue,magenta,yellow,green \"npm run dev -w apps/api\" \"npm run dev -w apps/gateway\" \"npm run dev -w apps/workers\" \"npm run dev -w apps/web\"",
+    "migrate": "npm run migrate -w apps/api",
+    "test": "tsx --test \"packages/*/src/**/*.test.ts\" \"apps/*/src/**/*.test.ts\"",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "smoke": "tsx scripts/smoke.ts",
+    "deps:up": "docker compose up -d postgres redis redpanda",
+    "stack:up": "docker compose up --build -d",
+    "stack:down": "docker compose down"
+  },
+  "dependencies": {
+    "tsx": "^4.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "concurrently": "^9.0.0",
+    "typescript": "^5.6.0"
+  }
+}

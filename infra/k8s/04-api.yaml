@@ -1,0 +1,73 @@
+# The API is stateless, so scaling it is just "run more copies".
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: relay
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: api }
+  template:
+    metadata:
+      labels: { app: api }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+    spec:
+      containers:
+        - name: api
+          image: relay-backend:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: APP, value: api }
+            - { name: PORT, value: "3000" }
+            - { name: NODE_ENV, value: production }
+          envFrom:
+            - configMapRef: { name: relay-config }
+            - secretRef: { name: relay-secrets }
+          ports:
+            - containerPort: 3000
+          # Liveness: restart the container if the process is stuck.
+          livenessProbe:
+            httpGet: { path: /healthz, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          # Readiness: only send traffic once Postgres and Redis are reachable.
+          readinessProbe:
+            httpGet: { path: /readyz, port: 3000 }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: relay
+spec:
+  selector: { app: api }
+  ports:
+    - port: 3000
+---
+# Adds API pods when average CPU passes 70% (needs metrics-server in the cluster).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+  namespace: relay
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

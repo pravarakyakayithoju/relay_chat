@@ -1,0 +1,19 @@
+# Runs database migrations once per release, before the new pods start serving.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: relay-migrate
+  namespace: relay
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: relay-backend:latest
+          imagePullPolicy: IfNotPresent
+          command: ["npm", "run", "migrate", "-w", "apps/api"]
+          envFrom:
+            - configMapRef: { name: relay-config }
+            - secretRef: { name: relay-secrets }

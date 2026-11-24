@@ -1,0 +1,26 @@
+# Prometheus pulls ("scrapes") /metrics from every service instance.
+#
+# dns_sd_configs asks Docker's DNS for the service name and gets one address
+# per running container, so new replicas are discovered automatically.
+
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: api
+    dns_sd_configs:
+      - names: ["api"]
+        type: A
+        port: 3000
+
+  - job_name: gateway
+    dns_sd_configs:
+      - names: ["gateway"]
+        type: A
+        port: 4000
+
+  - job_name: workers
+    dns_sd_configs:
+      - names: ["workers"]
+        type: A
+        port: 9100

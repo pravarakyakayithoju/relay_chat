@@ -1,0 +1,61 @@
+# The gateway is stateful: each pod holds open WebSocket connections.
+# CPU is a poor scaling signal for it - connections per pod (the ws_connections
+# metric) is the right one, which needs a custom-metrics adapter. Kept at a
+# fixed replica count here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: relay
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Replace pods one at a time so only a slice of users reconnects at once.
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels: { app: gateway }
+  template:
+    metadata:
+      labels: { app: gateway }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4000"
+    spec:
+      # Time for the gateway to tell clients to reconnect elsewhere before it is killed.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: gateway
+          image: relay-backend:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: APP, value: gateway }
+            - { name: GATEWAY_PORT, value: "4000" }
+            - { name: NODE_ENV, value: production }
+          envFrom:
+            - configMapRef: { name: relay-config }
+            - secretRef: { name: relay-secrets }
+          ports:
+            - containerPort: 4000
+          livenessProbe:
+            httpGet: { path: /healthz, port: 4000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /healthz, port: 4000 }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: relay
+spec:
+  selector: { app: gateway }
+  ports:
+    - port: 4000

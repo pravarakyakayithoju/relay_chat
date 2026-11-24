@@ -1,0 +1,11 @@
+{
+  "name": "@relay/shared",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Types, event contracts and pure helpers shared by every Relay service.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

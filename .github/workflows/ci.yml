@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Fast checks: types, unit tests, and that the web app builds.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build -w apps/web
+
+  # Applies every migration to a real, empty Postgres.
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: chat
+          POSTGRES_PASSWORD: chat
+          POSTGRES_DB: chat
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U chat -d chat"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: npm run migrate
+      # Running it twice proves the runner is idempotent.
+      - run: npm run migrate
+
+  # Starts the whole system with Docker Compose and drives it like two real users.
+  end-to-end:
+    runs-on: ubuntu-latest
+    needs: [check, migrations]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: docker compose up --build -d
+      - name: Wait for the stack to answer
+        run: |
+          for attempt in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/workspaces || true)
+            if [ "$code" = "401" ]; then echo "API is up"; break; fi
+            sleep 5
+          done
+          # Give the workers a moment to join their Kafka consumer groups.
+          sleep 20
+      - run: npm run smoke
+      - name: Show logs if something failed
+        if: failure()
+        run: docker compose logs --tail 200
+      - if: always()
+        run: docker compose down -v

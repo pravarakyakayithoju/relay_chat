@@ -1,0 +1,172 @@
+# The whole system on one machine.
+#
+#   docker compose up --build -d        start everything  ->  http://localhost:8080
+#   docker compose up -d postgres redis redpanda          only the databases (for `npm run dev`)
+#   docker compose --profile monitoring up -d             also start Prometheus + Grafana
+#   docker compose down                 stop (add -v to also delete the data)
+
+name: relay
+
+x-backend: &backend
+  image: relay-backend
+  build:
+    context: .
+    dockerfile: infra/docker/backend.Dockerfile
+  restart: unless-stopped
+
+x-backend-env: &backend-env
+  DATABASE_URL: postgres://chat:chat@postgres:5432/chat
+  REDIS_URL: redis://redis:6379
+  KAFKA_BROKERS: redpanda:9092
+  JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+services:
+  # ---------------------------------------------------------------- data stores
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: chat
+      POSTGRES_PASSWORD: chat
+      POSTGRES_DB: chat
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chat -d chat"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Redpanda speaks the Kafka protocol but is a single small binary with no
+  # ZooKeeper or JVM, which keeps the stack light enough for a laptop.
+  redpanda:
+    image: redpandadata/redpanda:v24.1.1
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=512M
+      - --default-log-level=warn
+      # Two listeners: "internal" for other containers, "external" for your laptop.
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "19092:19092"
+    volumes:
+      - redpandadata:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # ------------------------------------------------------------------- services
+  # Runs once, applies database migrations, exits. The app services wait for it.
+  migrate:
+    <<: *backend
+    restart: "no"
+    command: ["npm", "run", "migrate", "-w", "apps/api"]
+    environment:
+      <<: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      APP: api
+      PORT: "3000"
+      # Raise these when load testing from one machine (see loadtests/README.md).
+      AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-20}
+      SEND_RATE_LIMIT: ${SEND_RATE_LIMIT:-30}
+      RECENT_CACHE_TTL_SECONDS: ${RECENT_CACHE_TTL_SECONDS:-30}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+
+  gateway:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      APP: gateway
+      GATEWAY_PORT: "4000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+
+  workers:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      APP: workers
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+
+  # The only service exposed to your browser.
+  nginx:
+    image: relay-web
+    build:
+      context: .
+      dockerfile: infra/nginx/Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+      - gateway
+    restart: unless-stopped
+
+  # --------------------------------------------------- monitoring (opt-in profile)
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: ["monitoring"]
+    volumes:
+      - ./infra/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    profiles: ["monitoring"]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./infra/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  pgdata:
+  redpandadata:

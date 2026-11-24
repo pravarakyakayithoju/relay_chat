@@ -1,0 +1,22 @@
+# Non-secret settings shared by every backend pod.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: relay-config
+  namespace: relay
+data:
+  REDIS_URL: redis://redis:6379
+  KAFKA_BROKERS: redpanda:9092
+  LOG_LEVEL: info
+---
+# Example only. In a real cluster create this with `kubectl create secret`
+# or a secrets manager - never commit real secrets to Git.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: relay-secrets
+  namespace: relay
+type: Opaque
+stringData:
+  DATABASE_URL: postgres://chat:chat@postgres:5432/chat
+  JWT_SECRET: change-me-to-a-long-random-string
